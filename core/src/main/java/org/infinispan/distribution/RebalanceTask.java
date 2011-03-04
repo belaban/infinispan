@@ -57,12 +57,10 @@ public class RebalanceTask extends RehashTask {
 
    protected void performRehash() throws Exception {
       long start = System.currentTimeMillis();
-      if (log.isDebugEnabled()) log.debug("Commencing rehash on node: %s. Before start, distributionManager.joinComplete = %s", getMyAddress(), distributionManager.isJoinComplete());
+      if (log.isDebugEnabled())
+         log.debug("Commencing rehash on node: %s. Before start, distributionManager.joinComplete = %s", getMyAddress(), distributionManager.isJoinComplete());
       ConsistentHash chOld, chNew;
       try {
-//         if (distributionManager.isJoinComplete()) {
-//            throw new IllegalStateException("Join on " + getMyAddress() + " cannot be complete without rehash to finishing");
-//         }
          // 1.  Get the old CH
          chOld=distributionManager.getConsistentHash();
 
@@ -74,10 +72,7 @@ public class RebalanceTask extends RehashTask {
 
          try {
             if (configuration.isRehashEnabled()) {
-               // Broadcast new temp CH
-               // broadcastNewCh();
-
-               distributionManager.getTransactionLogger().enable(); // ???
+               distributionManager.getTransactionLogger().enable(); // todo: check
                distributionManager.getTransactionLogger().blockNewTransactions();
 
                int numOwners = configuration.getNumOwners();

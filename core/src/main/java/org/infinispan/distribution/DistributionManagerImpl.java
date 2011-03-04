@@ -220,14 +220,6 @@ public class DistributionManagerImpl implements DistributionManager {
       List<Address> members = t.getMembers();
       consistentHash = createConsistentHash(configuration, members, topologyInfo);
       self = t.getAddress();
-      /*if (members.size() > 1 *//** && !t.getCoordinator().equals(self) **//*) {
-          System.out.println("-- starting JoinTask");
-         JoinTask joinTask = new JoinTask(rpcManager, cf, configuration, dataContainer, this, inboundInvocationHandler);
-         joinFuture = rehashExecutor.submit(joinTask);
-         //task will set joinComplete flag
-      } else {
-         setJoinComplete(true);
-      }*/
       setJoinComplete(true);
       startLatch.open();
    }
@@ -239,58 +231,7 @@ public class DistributionManagerImpl implements DistributionManager {
       setJoinComplete(false);
    }
 
-   /*public void rehash(List<Address> newMembers, List<Address> oldMembers) {
-      boolean join = oldMembers.size() < newMembers.size();
-      // on view change, we should update our view
-      log.info("Detected a view change.  Member list changed from %s to %s", oldMembers, newMembers);
-
-      if (join) {
-         Address joiner = MembershipArithmetic.getMemberJoined(oldMembers, newMembers);
-         log.info("This is a JOIN event!  Wait for notification from new joiner " + joiner);
-      } else {
-         Address leaver = MembershipArithmetic.getMemberLeft(oldMembers, newMembers);
-         log.info("This is a LEAVE event!  Node %s has just left", leaver);
-
-
-         try {
-            if (!(consistentHash instanceof UnionConsistentHash)) {
-               oldConsistentHash = consistentHash;
-            } else {
-               oldConsistentHash = ((UnionConsistentHash) consistentHash).getNewConsistentHash();
-            }
-            addLeaverAndUpdatedConsistentHash(leaver);
-         } catch (Exception e) {
-            log.fatal("Unable to process leaver!!", e);
-            throw new CacheException(e);
-         }
-
-         List<Address> stateProviders = holdersOfLeaversState(leaver);
-         List<Address> receiversOfLeaverState = receiversOfLeaverState(stateProviders);
-         boolean willReceiveLeaverState = receiversOfLeaverState.contains(self);
-         boolean willProvideState = stateProviders.contains(self);
-         if (willReceiveLeaverState || willProvideState) {
-            log.info("I %s am participating in rehash, state providers %s, state receivers %s",
-                     rpcManager.getTransport().getAddress(), stateProviders, receiversOfLeaverState);
-
-            transactionLogger.enable();
-
-            if (leaveTaskFuture != null
-                  && (!leaveTaskFuture.isCancelled() || !leaveTaskFuture.isDone())) {
-               if (trace) log.trace("Canceling running leave task!");
-               leaveTaskFuture.cancel(true);
-            }
-
-            InvertedLeaveTask task = new InvertedLeaveTask(this, rpcManager, configuration, cf, dataContainer,
-                                                           stateProviders, receiversOfLeaverState, willReceiveLeaverState);
-            leaveTaskFuture = rehashExecutor.submit(task);
-         } else {
-            log.info("Not in same subspace, so ignoring leave event");
-            topologyInfo.removeNodeInfo(leaver);
-            removeLeaver(leaver);
-         }
-      }
-   }
-*/
+   
    public List<Address> getLeavers() {
       chSwitchLock.readLock().lock();
       try {
