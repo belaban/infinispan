@@ -57,9 +57,6 @@ public class JoinTask extends RehashTask {
    }
 
    protected void performRehash() throws Exception {
-
-       System.out.println("JoinTask.performRehash()");
-
       long start = System.currentTimeMillis();
       if (log.isDebugEnabled()) log.debug("Commencing rehash on node: %s. Before start, distributionManager.joinComplete = %s", getMyAddress(), distributionManager.isJoinComplete());
       ConsistentHash chOld, chNew;
@@ -67,18 +64,14 @@ public class JoinTask extends RehashTask {
          if (distributionManager.isJoinComplete()) {
             throw new IllegalStateException("Join on " + getMyAddress() + " cannot be complete without rehash to finishing");
          }
-         // 1.  Get chOld from coord.
-          System.out.println("-- retrieving oldCH from " + coordinator() + ": ");
+         // 1.  Get chOld from coord.         
          chOld = retrieveOldConsistentHash();
-          System.out.println("oldCH: " + chOld);
 
          // 2.  new CH instance
          if (chOld.getCaches().contains(self))
             chNew = chOld;
          else
             chNew = createConsistentHash(configuration, chOld.getCaches(), distributionManager.getTopologyInfo(), self);
-
-          System.out.println("chNew: " + chNew);
 
          distributionManager.setConsistentHash(chNew);
          try {
@@ -95,8 +88,6 @@ public class JoinTask extends RehashTask {
 
                List<Address> addressesWhoMaySendStuff = getAddressesWhoMaySendStuff(chNew, configuration.getNumOwners());
                Set<Future<Void>> stateRetrievalProcesses = new HashSet<Future<Void>>(addressesWhoMaySendStuff.size());
-
-                System.out.println("-- fetching state from " + addressesWhoMaySendStuff);
 
                // This process happens in parallel
                for (Address stateProvider: addressesWhoMaySendStuff) {
@@ -167,17 +158,11 @@ public class JoinTask extends RehashTask {
                 log.trace("Requesting old consistent hash from coordinator");
             Map<Address, Response> resp;
             List<Address> addresses;
-
             try {
-                if(self != null && self.equals(coordinator())) {
-                    addresses=distributionManager.requestPermissionToJoin(self);
-                }
-                else {
-                    resp = rpcManager.invokeRemotely(coordinator(), cf.buildRehashControlCommand(
-                      JOIN_REQ, self), SYNCHRONOUS, configuration.getRehashRpcTimeout(),
-                                                     true);
-                    addresses = parseResponses(resp.values());
-                }
+                resp = rpcManager.invokeRemotely(coordinator(), cf.buildRehashControlCommand(
+                                JOIN_REQ, self), SYNCHRONOUS, configuration.getRehashRpcTimeout(),
+                                true);
+                addresses = parseResponses(resp.values());
                 if (log.isDebugEnabled())
                     log.debug("Retrieved old consistent hash address list %s", addresses);
             } catch (TimeoutException te) {

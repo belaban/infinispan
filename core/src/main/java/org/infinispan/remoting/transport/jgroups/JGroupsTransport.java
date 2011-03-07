@@ -454,14 +454,10 @@ public class JGroupsTransport extends AbstractTransport implements ExtendedMembe
 
          final Address address = getAddress();
          final int viewId = (int) newView.getVid().getId();
-         boolean needsRejoin = needsToRejoin(newView);
-
-          if(newView instanceof MergeView) {
-              needsRejoin=true;
-              notifier.notifyMerge(members, oldMembers, address, viewId, needsRejoin, getSubgroups(mv.getSubgroups()));
-          }
-          else
-              notifier.notifyViewChange(members, oldMembers, address, viewId, needsRejoin);
+         final boolean needsRejoin = needsToRejoin(newView);
+         
+         notifier.notifyMerge(members, oldMembers, address, viewId, needsRejoin, getSubgroups(mv.getSubgroups()));
+         notifier.notifyViewChange(members, oldMembers, address, viewId, needsRejoin);
       }
 
       private List<List<Address>> getSubgroups(Vector<View> subviews) {
@@ -476,7 +472,7 @@ public class JGroupsTransport extends AbstractTransport implements ExtendedMembe
       List<Address> oldMembers = null;      
       boolean hasNotifier = notifier != null;
       Notify n = null;
-
+      
       if (hasNotifier) {
          if (newView instanceof MergeView) {
             if (log.isInfoEnabled())
