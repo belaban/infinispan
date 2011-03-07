@@ -12,6 +12,8 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 
@@ -50,19 +52,19 @@ public class ExperimentalDefaultConsistentHash extends AbstractConsistentHash {
 
       @SuppressWarnings("unchecked")
       public Object readObject(ObjectInput input) throws IOException, ClassNotFoundException {
-         List<Address> addresses = (List<Address>) input.readObject();
+         Set<Address> addresses = (HashSet<Address>) input.readObject();
          DefaultConsistentHash gch = new DefaultConsistentHash();
          gch.setCaches(addresses);
          return gch;
       }
    }
 
-   public List<Address> getCaches() {
-      return nodes;
+   public Set<Address> getCaches() {
+      return new LinkedHashSet<Address>(nodes);
    }
 
-   public void setCaches(List<Address> caches) {
-      nodes = caches;
+   public void setCaches(Set<Address> caches) {
+      nodes = new LinkedList<Address>(caches);
       int numNodes = nodes.size();
 
       int poolSize = 0;
