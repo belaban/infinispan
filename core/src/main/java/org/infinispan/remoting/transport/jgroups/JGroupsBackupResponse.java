@@ -82,7 +82,7 @@ public class JGroupsBackupResponse implements BackupResponse {
             errors.put(siteName, newTimeoutException(entry, entry.getKey().getTimeout()));
             addCommunicationError(siteName);
          } catch (ExecutionException ue) {
-            log.tracef(ue.getCause(), "Communication error with site %s", siteName);
+            log.tracef("Communication error with site %s", siteName);
             errors.put(siteName, ue.getCause());
             addCommunicationError(siteName);
          } finally {
