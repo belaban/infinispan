@@ -1000,7 +1000,7 @@ public class JGroupsTransport implements Transport, ChannelListener {
       if (relay2 == null) {
          return null;
       }
-      List<String> sites = relay2.getCurrentSites();
+      Collection<String> sites = relay2.getCurrentSites();
       return sites == null ? Collections.emptySet() : new TreeSet<>(sites);
    }
 
