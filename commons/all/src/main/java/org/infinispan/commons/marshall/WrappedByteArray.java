@@ -1,16 +1,14 @@
 package org.infinispan.commons.marshall;
 
-import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Set;
-
 import org.infinispan.commons.util.Util;
 import org.infinispan.protostream.annotations.ProtoFactory;
 import org.infinispan.protostream.annotations.ProtoField;
 import org.infinispan.protostream.annotations.ProtoTypeId;
+
+import java.io.*;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Set;
 
 /**
  * Simple wrapper around a byte[] to provide equals and hashCode semantics
@@ -18,11 +16,14 @@ import org.infinispan.protostream.annotations.ProtoTypeId;
  * @since 9.0
  */
 @ProtoTypeId(ProtoStreamTypeIds.WRAPPED_BYTE_ARRAY)
-public class WrappedByteArray implements WrappedBytes {
+public class WrappedByteArray implements WrappedBytes, org.jgroups.util.SizeStreamable {
    public static final WrappedByteArray EMPTY_BYTES = new WrappedByteArray(Util.EMPTY_BYTE_ARRAY);
-   private final byte[] bytes;
+   private byte[] bytes;
    private transient int hashCode;
    private transient boolean initializedHashCode;
+
+   public WrappedByteArray() {
+   }
 
    @ProtoFactory
    public WrappedByteArray(byte[] bytes) {
@@ -34,6 +35,32 @@ public class WrappedByteArray implements WrappedBytes {
       assert hashCode == Arrays.hashCode(bytes) : "HashCode " + hashCode + " doesn't match " + Arrays.hashCode(bytes);
       this.hashCode = hashCode;
       this.initializedHashCode = true;
+   }
+
+   @Override
+   public int serializedSize() {
+      return (bytes != null? bytes.length : 0) + Integer.BYTES*2 + 1;
+   }
+
+   @Override
+   public void writeTo(DataOutput out) throws IOException {
+      int len=bytes != null? bytes.length : 0;
+      out.writeInt(len);
+      if(len > 0)
+         out.write(bytes, 0, bytes.length);
+      out.writeInt(hashCode);
+      out.writeBoolean(initializedHashCode);
+   }
+
+   @Override
+   public void readFrom(DataInput in) throws IOException, ClassNotFoundException {
+      int len=in.readInt();
+      if(len > 0) {
+         bytes=new byte[len];
+         in.readFully(bytes, 0, len);
+      }
+      hashCode=in.readInt();
+      initializedHashCode=in.readBoolean();
    }
 
    @Override
@@ -94,6 +121,8 @@ public class WrappedByteArray implements WrappedBytes {
    public String toString() {
       return "WrappedByteArray[" + Util.hexDump(bytes) + ']';
    }
+
+
 
    public static final class Externalizer extends AbstractExternalizer<WrappedByteArray> {
 

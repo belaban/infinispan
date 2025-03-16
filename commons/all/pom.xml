@@ -20,6 +20,11 @@
       </dependency>
 
       <dependency>
+              <groupId>org.jgroups</groupId>
+              <artifactId>jgroups</artifactId>
+           </dependency>
+
+      <dependency>
          <groupId>org.infinispan.protostream</groupId>
          <artifactId>protostream</artifactId>
       </dependency>

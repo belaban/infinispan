@@ -1,40 +1,7 @@
 package org.infinispan.cache.impl;
 
-import static org.infinispan.util.logging.Log.CONFIG;
-import static org.infinispan.util.logging.Log.CONTAINER;
-
-import java.lang.annotation.Annotation;
-import java.lang.reflect.Method;
-import java.util.AbstractSet;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Properties;
-import java.util.Set;
-import java.util.Spliterator;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
-import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
-import java.util.function.Function;
-import java.util.function.Supplier;
-import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
-
-import javax.security.auth.Subject;
-import javax.transaction.xa.XAResource;
-
-import org.infinispan.AdvancedCache;
-import org.infinispan.CacheCollection;
-import org.infinispan.CacheSet;
-import org.infinispan.CacheStream;
-import org.infinispan.LockedStream;
+import jakarta.transaction.TransactionManager;
+import org.infinispan.*;
 import org.infinispan.batch.BatchContainer;
 import org.infinispan.commons.api.query.ContinuousQuery;
 import org.infinispan.commons.api.query.Query;
@@ -42,13 +9,7 @@ import org.infinispan.commons.dataconversion.Encoder;
 import org.infinispan.commons.dataconversion.MediaType;
 import org.infinispan.commons.dataconversion.Wrapper;
 import org.infinispan.commons.time.TimeService;
-import org.infinispan.commons.util.ByRef;
-import org.infinispan.commons.util.CloseableIterator;
-import org.infinispan.commons.util.CloseableSpliterator;
-import org.infinispan.commons.util.Closeables;
-import org.infinispan.commons.util.IteratorMapper;
-import org.infinispan.commons.util.SpliteratorMapper;
-import org.infinispan.commons.util.Util;
+import org.infinispan.commons.util.*;
 import org.infinispan.commons.util.Version;
 import org.infinispan.commons.util.concurrent.AggregateCompletionStage;
 import org.infinispan.commons.util.concurrent.CompletableFutures;
@@ -80,13 +41,7 @@ import org.infinispan.manager.EmbeddedCacheManager;
 import org.infinispan.metadata.EmbeddedMetadata;
 import org.infinispan.metadata.Metadata;
 import org.infinispan.notifications.cachelistener.CacheNotifier;
-import org.infinispan.notifications.cachelistener.annotation.CacheEntriesEvicted;
-import org.infinispan.notifications.cachelistener.annotation.CacheEntryCreated;
-import org.infinispan.notifications.cachelistener.annotation.CacheEntryExpired;
-import org.infinispan.notifications.cachelistener.annotation.CacheEntryInvalidated;
-import org.infinispan.notifications.cachelistener.annotation.CacheEntryModified;
-import org.infinispan.notifications.cachelistener.annotation.CacheEntryRemoved;
-import org.infinispan.notifications.cachelistener.annotation.CacheEntryVisited;
+import org.infinispan.notifications.cachelistener.annotation.*;
 import org.infinispan.notifications.cachelistener.filter.CacheEventConverter;
 import org.infinispan.notifications.cachelistener.filter.CacheEventFilter;
 import org.infinispan.partitionhandling.AvailabilityMode;
@@ -101,7 +56,23 @@ import org.infinispan.util.concurrent.locks.LockManager;
 import org.infinispan.util.logging.Log;
 import org.infinispan.util.logging.LogFactory;
 
-import jakarta.transaction.TransactionManager;
+import javax.security.auth.Subject;
+import javax.transaction.xa.XAResource;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Method;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
+
+import static org.infinispan.util.logging.Log.CONFIG;
+import static org.infinispan.util.logging.Log.CONTAINER;
 
 /**
  * Simple local cache without interceptor stack.
@@ -111,7 +82,7 @@ import jakarta.transaction.TransactionManager;
  */
 @MBean(objectName = CacheImpl.OBJECT_NAME, description = "Component that represents an individual cache instance.")
 @Scope(Scopes.NAMED_CACHE)
-public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V>, InternalCache<K, V> {
+public class SimpleCacheImpl<K, V> extends TriCache<K,V> implements AdvancedCache<K, V>, InternalCache<K, V> {
    private final static Log log = LogFactory.getLog(SimpleCacheImpl.class);
 
    private final static String NULL_KEYS_NOT_SUPPORTED = "Null keys are not supported!";
@@ -136,7 +107,8 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V>, InternalCache
    private boolean hasListeners = false;
 
    public SimpleCacheImpl(String cacheName) {
-      this.name = cacheName;
+      super("jgroups-tcp.xml", null);
+      this.name=cacheName;
    }
 
    @Override
@@ -145,6 +117,7 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V>, InternalCache
          displayName = "Starts cache."
    )
    public void start() {
+      super.start();
       this.defaultMetadata = new EmbeddedMetadata.Builder()
             .lifespan(configuration.expiration().lifespan())
             .maxIdle(configuration.expiration().maxIdle()).build();
@@ -157,10 +130,16 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V>, InternalCache
          displayName = "Stops cache."
    )
    public void stop() {
-      if (log.isDebugEnabled())
-         log.debugf("Stopping cache %s on %s", getName(), getCacheManager().getAddress());
-      dataContainer = null;
-      componentRegistry.stop();
+      try {
+         super.stop();
+         if(log.isDebugEnabled())
+            log.debugf("Stopping cache %s on %s", getName(), getCacheManager().getAddress());
+         dataContainer=null;
+         componentRegistry.stop();
+      }
+      catch(Exception ex) {
+         throw new RuntimeException(ex);
+      }
    }
 
 
@@ -552,8 +531,12 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V>, InternalCache
       return false;
    }
 
-   @Override
    public V get(Object key) {
+      return super.get((K)key);
+   }
+
+   @Override
+   protected V _get(Object key) {
       Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED);
       InternalCacheEntry<K, V> entry = getDataContainer().get(key);
       if (entry == null) {
@@ -661,7 +644,7 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V>, InternalCache
          description = "Clears the cache",
          displayName = "Clears the cache", name = "clear"
    )
-   public void clear() {
+   public void _clear() {
       DataContainer<K, V> dataContainer = getDataContainer();
       boolean hasListeners = this.hasListeners;
       ArrayList<InternalCacheEntry<K, V>> copyEntries;
@@ -715,9 +698,13 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V>, InternalCache
       return new PropertyFormatter().format(configuration);
    }
 
+   protected V _put(K key, V value) {
+      return getAndPutInternal(key, value, defaultMetadata);
+   }
+
    @Override
    public V put(K key, V value) {
-      return getAndPutInternal(key, value, defaultMetadata);
+      return super.put(key, value);
    }
 
    @Override
