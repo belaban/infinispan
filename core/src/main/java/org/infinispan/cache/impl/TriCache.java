@@ -195,22 +195,6 @@ public abstract class TriCache<K,V> implements Receiver, Closeable, Runnable, Di
         }
     }
 
-/*    public int size() {
-        return map.size();
-    }*/
-
- /*   public boolean isEmpty() {
-        return map.isEmpty();
-    }*/
-
-/*    public Set<K> keySet() {
-        return map.keySet();
-    }*/
-
-   /* public Map<K,V> getContents() {
-        return map;
-    }*/
-
     public void receive(Message msg) {
         try {
             Data<K,V> data=msg.getObject();
