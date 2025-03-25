@@ -154,7 +154,7 @@ public abstract class TriCache<K,V> implements Receiver, Closeable, Runnable, Di
      * @param key the key
      * @return the value associated with the key, or null if key has not been set
      */
-    public V get(K key) {
+    public V get(Object key) {
         Address primary=getPrimary(key.hashCode());
         if(primary == null)
             throw new IllegalArgumentException("primary must not be null");
@@ -172,7 +172,7 @@ public abstract class TriCache<K,V> implements Receiver, Closeable, Runnable, Di
         try {
             if(is_trace)
                 logger.trace("%s: sending get(%s) to %s (req=%d)", local_addr, key, primary, req_id);
-            Data<K,V> data=new Data<>(Data.Type.GET, req_id, key, null, null);
+            Data<K,V> data=new Data<>(Data.Type.GET, req_id, (K)key, null, null);
             send(primary, data);
             return future.get(timeout, TimeUnit.MILLISECONDS);  // req_id was removed by ACK processing
         }
