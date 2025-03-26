@@ -121,6 +121,16 @@ public abstract class BaseStateTransferInterceptor extends DDAsyncInterceptor {
    }
 
    @Override
+   public Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+      switch(command.getCommandId()) {
+         case GetKeyValueCommand.COMMAND_ID:
+            updateTopologyId((GetKeyValueCommand)command);
+            return callNext(ctx, command);
+      }
+      return callNext(ctx, command);
+   }
+
+   @Override
    public Object visitGetCacheEntryCommand(InvocationContext ctx, GetCacheEntryCommand command)
          throws Throwable {
       return handleReadCommand(ctx, command);

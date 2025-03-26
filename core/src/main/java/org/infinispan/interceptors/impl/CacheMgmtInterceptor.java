@@ -1,41 +1,14 @@
 package org.infinispan.interceptors.impl;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicLongFieldUpdater;
-import java.util.stream.Stream;
-
 import org.infinispan.AdvancedCache;
 import org.infinispan.commands.FlagAffectedCommand;
-import org.infinispan.commands.functional.AbstractWriteManyCommand;
-import org.infinispan.commands.functional.ReadOnlyKeyCommand;
-import org.infinispan.commands.functional.ReadOnlyManyCommand;
-import org.infinispan.commands.functional.ReadWriteKeyCommand;
-import org.infinispan.commands.functional.ReadWriteKeyValueCommand;
-import org.infinispan.commands.functional.ReadWriteManyCommand;
-import org.infinispan.commands.functional.ReadWriteManyEntriesCommand;
-import org.infinispan.commands.functional.WriteOnlyKeyCommand;
-import org.infinispan.commands.functional.WriteOnlyKeyValueCommand;
+import org.infinispan.commands.VisitableCommand;
+import org.infinispan.commands.functional.*;
 import org.infinispan.commands.read.AbstractDataCommand;
 import org.infinispan.commands.read.GetAllCommand;
 import org.infinispan.commands.read.GetCacheEntryCommand;
 import org.infinispan.commands.read.GetKeyValueCommand;
-import org.infinispan.commands.write.ComputeCommand;
-import org.infinispan.commands.write.ComputeIfAbsentCommand;
-import org.infinispan.commands.write.DataWriteCommand;
-import org.infinispan.commands.write.EvictCommand;
-import org.infinispan.commands.write.IracPutKeyValueCommand;
-import org.infinispan.commands.write.PutKeyValueCommand;
-import org.infinispan.commands.write.PutMapCommand;
-import org.infinispan.commands.write.RemoveCommand;
-import org.infinispan.commands.write.ReplaceCommand;
+import org.infinispan.commands.write.*;
 import org.infinispan.commons.stat.MetricInfo;
 import org.infinispan.commons.time.TimeService;
 import org.infinispan.commons.util.ByRef;
@@ -72,6 +45,18 @@ import org.infinispan.metrics.impl.helper.KeyMetrics;
 import org.infinispan.persistence.manager.PersistenceManager;
 import org.infinispan.persistence.manager.PersistenceManager.AccessMode;
 import org.infinispan.topology.CacheTopology;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
+import java.util.stream.Stream;
 
 /**
  * Captures cache management statistics.
@@ -113,6 +98,22 @@ public final class CacheMgmtInterceptor extends JmxStatsCommandInterceptor imple
       // This is just here to notify that evictions are counted in the ClusteringDependentLogic via NotifyHelper and
       // EvictionManager
       return super.visitEvictCommand(ctx, command);
+   }
+
+   @Override
+   public Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+      switch(command.getCommandId()) {
+         case GetKeyValueCommand.COMMAND_ID:
+            boolean statisticsEnabled = collectStatisticsForCommand((AbstractDataCommand)command);
+            if (!statisticsEnabled || !ctx.isOriginLocal())
+               return callNext(ctx, command);
+
+            long start = timeService.time();
+            return callNextAndFinally(ctx, command,
+                                        (rCtx, rCommand, rv, t) ->
+                                          addDataRead(rv != null, start, getReadOwnership(((AbstractDataCommand)rCommand).getSegment())));
+      }
+      return callNext(ctx, command);
    }
 
    @Override

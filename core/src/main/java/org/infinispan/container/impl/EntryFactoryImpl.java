@@ -117,9 +117,6 @@ public class EntryFactoryImpl implements EntryFactory {
          mvccEntry.setRead();
          cacheEntry = mvccEntry;
       }
-      if (log.isTraceEnabled()) {
-         log.tracef("Wrap %s for read. Entry=%s", toStr(key), cacheEntry);
-      }
       ctx.putLookedUpEntry(key, cacheEntry);
    }
 

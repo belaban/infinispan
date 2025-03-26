@@ -1,14 +1,5 @@
 package org.infinispan.interceptors.impl;
 
-import static org.infinispan.commons.util.Immutables.immutableListAdd;
-import static org.infinispan.commons.util.Immutables.immutableListRemove;
-import static org.infinispan.commons.util.Immutables.immutableListReplace;
-
-import java.util.List;
-import java.util.ListIterator;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.locks.ReentrantLock;
-
 import org.infinispan.commands.VisitableCommand;
 import org.infinispan.commons.CacheConfigurationException;
 import org.infinispan.commons.CacheException;
@@ -23,8 +14,17 @@ import org.infinispan.interceptors.AsyncInterceptor;
 import org.infinispan.interceptors.AsyncInterceptorChain;
 import org.infinispan.interceptors.ExceptionSyncInvocationStage;
 import org.infinispan.interceptors.InvocationStage;
+import org.infinispan.interceptors.locking.NonTransactionalLockingInterceptor;
+import org.infinispan.statetransfer.StateTransferInterceptor;
 import org.infinispan.util.logging.Log;
 import org.infinispan.util.logging.LogFactory;
+
+import java.util.List;
+import java.util.ListIterator;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.locks.ReentrantLock;
+
+import static org.infinispan.commons.util.Immutables.*;
 
 /**
  * Knows how to build and manage a chain of interceptors. Also in charge with invoking methods on the chain.
@@ -52,6 +52,12 @@ public class AsyncInterceptorChainImpl implements AsyncInterceptorChain {
          log.debugf("Interceptor chain size: %d", size());
          log.debugf("Interceptor chain is: %s", toString());
       }
+
+      removeInterceptor(VersionInterceptor.class);
+      removeInterceptor(CacheMgmtInterceptor.class);
+      removeInterceptor(StateTransferInterceptor.class);
+      removeInterceptor(InvocationContextInterceptor.class);
+      removeInterceptor(NonTransactionalLockingInterceptor.class);
    }
 
    private void validateCustomInterceptor(Class<? extends AsyncInterceptor> i) {
@@ -235,7 +241,7 @@ public class AsyncInterceptorChainImpl implements AsyncInterceptorChain {
    @Override
    public Object invoke(InvocationContext ctx, VisitableCommand command) {
       try {
-         Object result = firstInterceptor.visitCommand(ctx, command);
+         Object result = firstInterceptor.handleCommand(ctx, command); // .visitCommand(ctx, command);
          if (result instanceof InvocationStage) {
             return ((InvocationStage) result).get();
          } else {

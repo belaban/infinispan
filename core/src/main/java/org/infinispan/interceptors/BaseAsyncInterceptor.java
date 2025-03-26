@@ -1,18 +1,18 @@
 package org.infinispan.interceptors;
 
-import java.util.Collection;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-
 import org.infinispan.commands.VisitableCommand;
 import org.infinispan.commons.util.Experimental;
+import org.infinispan.commons.util.concurrent.CompletionStages;
 import org.infinispan.configuration.cache.Configuration;
 import org.infinispan.context.InvocationContext;
 import org.infinispan.factories.annotations.Inject;
 import org.infinispan.factories.scopes.Scope;
 import org.infinispan.factories.scopes.Scopes;
 import org.infinispan.interceptors.impl.SimpleAsyncInvocationStage;
-import org.infinispan.commons.util.concurrent.CompletionStages;
+
+import java.util.Collection;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 /**
  * Base class for an interceptor in the new asynchronous invocation chain.
@@ -24,10 +24,13 @@ import org.infinispan.commons.util.concurrent.CompletionStages;
 @Scope(Scopes.NAMED_CACHE)
 public abstract class BaseAsyncInterceptor implements AsyncInterceptor {
    private final InvocationSuccessFunction<VisitableCommand> invokeNextFunction = (rCtx, rCommand, rv) -> invokeNext(rCtx, rCommand);
+   private final InvocationSuccessFunction<VisitableCommand> callNextFunction = (rCtx, rCommand, rv) -> callNext(rCtx, rCommand);
+
+
 
    @Inject protected Configuration cacheConfiguration;
-   private AsyncInterceptor nextInterceptor;
-   private DDAsyncInterceptor nextDDInterceptor;
+   protected AsyncInterceptor nextInterceptor;
+   protected DDAsyncInterceptor nextDDInterceptor;
 
    /**
     * Used internally to set up the interceptor.
@@ -64,6 +67,18 @@ public abstract class BaseAsyncInterceptor implements AsyncInterceptor {
       }
    }
 
+   public final Object callNext(InvocationContext ctx, VisitableCommand command) {
+      try {
+         if (nextDDInterceptor != null) {
+            return nextDDInterceptor.handleCommand(ctx, command);
+         } else {
+            return nextInterceptor.visitCommand(ctx, command);
+         }
+      } catch (Throwable throwable) {
+         return new ExceptionSyncInvocationStage(throwable);
+      }
+   }
+
    /**
     * Invoke the next interceptor, possibly with a new command, and execute an {@link InvocationCallback}
     * after all the interceptors have finished successfully.
@@ -76,6 +91,24 @@ public abstract class BaseAsyncInterceptor implements AsyncInterceptor {
          Object rv;
          if (nextDDInterceptor != null) {
             rv = command.acceptVisitor(ctx, nextDDInterceptor);
+         } else {
+            rv = nextInterceptor.visitCommand(ctx, command);
+         }
+         if (rv instanceof InvocationStage) {
+            return ((InvocationStage) rv).thenApply(ctx, command, function);
+         }
+         return function.apply(ctx, command, rv);
+      } catch (Throwable throwable) {
+         return new ExceptionSyncInvocationStage(throwable);
+      }
+   }
+
+   public <C extends VisitableCommand> Object callNextThenApply(InvocationContext ctx, C command,
+                                                                      InvocationSuccessFunction<C> function) {
+      try {
+         Object rv;
+         if (nextDDInterceptor != null) {
+            rv = nextDDInterceptor.handleCommand(ctx, command);
          } else {
             rv = nextInterceptor.visitCommand(ctx, command);
          }
@@ -138,6 +171,25 @@ public abstract class BaseAsyncInterceptor implements AsyncInterceptor {
       }
    }
 
+   public <C extends VisitableCommand> Object callNextAndExceptionally(InvocationContext ctx, C command,
+                                                                       InvocationExceptionFunction<C> function) {
+      try {
+         Object rv;
+         if (nextDDInterceptor != null) {
+            rv = nextDDInterceptor.handleCommand(ctx, command);
+         } else {
+            rv = nextInterceptor.visitCommand(ctx, command);
+         }
+         /*if (rv instanceof InvocationStage) {
+            return ((InvocationStage) rv).andExceptionally(ctx, command, function);
+         }*/
+         // No exception
+         return rv;
+      } catch (Throwable throwable) {
+         return new ExceptionSyncInvocationStage(throwable);
+      }
+   }
+
    /**
     * Invoke the next interceptor, possibly with a new command, and execute an {@link InvocationCallback}
     * after all the interceptors have finished, with or without an exception.
@@ -152,6 +204,33 @@ public abstract class BaseAsyncInterceptor implements AsyncInterceptor {
          try {
             if (nextDDInterceptor != null) {
                rv = command.acceptVisitor(ctx, nextDDInterceptor);
+            } else {
+               rv = nextInterceptor.visitCommand(ctx, command);
+            }
+            throwable = null;
+
+            if (rv instanceof InvocationStage) {
+               return ((InvocationStage) rv).andFinally(ctx, command, action);
+            }
+         } catch (Throwable t) {
+            rv = null;
+            throwable = t;
+         }
+         action.accept(ctx, command, rv, throwable);
+         return throwable == null ? rv : new ExceptionSyncInvocationStage(throwable);
+      } catch (Throwable t) {
+         return new ExceptionSyncInvocationStage(t);
+      }
+   }
+
+   public <C extends VisitableCommand> Object callNextAndFinally(InvocationContext ctx, C command,
+                                                                 InvocationFinallyAction<C> action) {
+      try {
+         Object rv;
+         Throwable throwable;
+         try {
+            if (nextDDInterceptor != null) {
+               rv = nextDDInterceptor.handleCommand(ctx, command);
             } else {
                rv = nextInterceptor.visitCommand(ctx, command);
             }
@@ -231,6 +310,14 @@ public abstract class BaseAsyncInterceptor implements AsyncInterceptor {
          return invokeNext(ctx, command);
       }
       return asyncValue(delay).thenApply(ctx, command, invokeNextFunction);
+   }
+
+   public Object asyncCallNext(InvocationContext ctx, VisitableCommand command,
+                                     CompletionStage<?> delay) {
+      if (delay == null || CompletionStages.isCompletedSuccessfully(delay)) {
+         return callNext(ctx, command);
+      }
+      return asyncValue(delay).thenApply(ctx, command, callNextFunction);
    }
 
    /**

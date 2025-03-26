@@ -1,25 +1,7 @@
 package org.infinispan.interceptors.impl;
 
 
-import static org.infinispan.commons.util.Util.toStr;
-import static org.infinispan.functional.impl.EntryViews.snapshot;
-import static org.infinispan.transaction.impl.WriteSkewHelper.versionFromEntry;
-
-import java.lang.invoke.MethodHandles;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletionStage;
-import java.util.function.BiFunction;
-import java.util.function.Consumer;
-import java.util.function.Function;
-
+import io.reactivex.rxjava3.core.Flowable;
 import org.infinispan.Cache;
 import org.infinispan.InternalCacheSet;
 import org.infinispan.cache.impl.AbstractDelegatingCache;
@@ -27,46 +9,18 @@ import org.infinispan.commands.FlagAffectedCommand;
 import org.infinispan.commands.VisitableCommand;
 import org.infinispan.commands.Visitor;
 import org.infinispan.commands.control.LockControlCommand;
-import org.infinispan.commands.functional.Mutation;
-import org.infinispan.commands.functional.ReadOnlyKeyCommand;
-import org.infinispan.commands.functional.ReadOnlyManyCommand;
-import org.infinispan.commands.functional.ReadWriteKeyCommand;
-import org.infinispan.commands.functional.ReadWriteKeyValueCommand;
-import org.infinispan.commands.functional.ReadWriteManyCommand;
-import org.infinispan.commands.functional.ReadWriteManyEntriesCommand;
-import org.infinispan.commands.functional.TxReadOnlyKeyCommand;
-import org.infinispan.commands.functional.TxReadOnlyManyCommand;
-import org.infinispan.commands.functional.WriteOnlyKeyCommand;
-import org.infinispan.commands.functional.WriteOnlyKeyValueCommand;
-import org.infinispan.commands.functional.WriteOnlyManyCommand;
-import org.infinispan.commands.functional.WriteOnlyManyEntriesCommand;
-import org.infinispan.commands.read.EntrySetCommand;
-import org.infinispan.commands.read.GetAllCommand;
-import org.infinispan.commands.read.GetCacheEntryCommand;
-import org.infinispan.commands.read.GetKeyValueCommand;
-import org.infinispan.commands.read.KeySetCommand;
-import org.infinispan.commands.read.SizeCommand;
+import org.infinispan.commands.functional.*;
+import org.infinispan.commands.read.*;
 import org.infinispan.commands.tx.CommitCommand;
 import org.infinispan.commands.tx.PrepareCommand;
 import org.infinispan.commands.tx.RollbackCommand;
-import org.infinispan.commands.write.ClearCommand;
-import org.infinispan.commands.write.ComputeCommand;
-import org.infinispan.commands.write.ComputeIfAbsentCommand;
-import org.infinispan.commands.write.DataWriteCommand;
-import org.infinispan.commands.write.EvictCommand;
-import org.infinispan.commands.write.InvalidateCommand;
-import org.infinispan.commands.write.InvalidateL1Command;
-import org.infinispan.commands.write.IracPutKeyValueCommand;
-import org.infinispan.commands.write.PutKeyValueCommand;
-import org.infinispan.commands.write.PutMapCommand;
-import org.infinispan.commands.write.RemoveCommand;
-import org.infinispan.commands.write.RemoveExpiredCommand;
-import org.infinispan.commands.write.ReplaceCommand;
-import org.infinispan.commands.write.ValueMatcher;
+import org.infinispan.commands.write.*;
 import org.infinispan.commons.reactive.RxJavaInterop;
 import org.infinispan.commons.time.TimeService;
 import org.infinispan.commons.util.IntSet;
 import org.infinispan.commons.util.IntSets;
+import org.infinispan.commons.util.concurrent.AggregateCompletionStage;
+import org.infinispan.commons.util.concurrent.CompletionStages;
 import org.infinispan.configuration.cache.Configurations;
 import org.infinispan.container.entries.CacheEntry;
 import org.infinispan.container.entries.ExpiryHelper;
@@ -107,13 +61,20 @@ import org.infinispan.reactive.publisher.PublisherReducers;
 import org.infinispan.reactive.publisher.impl.ClusterPublisherManager;
 import org.infinispan.reactive.publisher.impl.DeliveryGuarantee;
 import org.infinispan.util.UserRaisedFunctionalException;
-import org.infinispan.commons.util.concurrent.AggregateCompletionStage;
-import org.infinispan.commons.util.concurrent.CompletionStages;
 import org.infinispan.util.logging.Log;
 import org.infinispan.util.logging.LogFactory;
 import org.reactivestreams.Publisher;
 
-import io.reactivex.rxjava3.core.Flowable;
+import java.lang.invoke.MethodHandles;
+import java.util.*;
+import java.util.concurrent.CompletionStage;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+
+import static org.infinispan.commons.util.Util.toStr;
+import static org.infinispan.functional.impl.EntryViews.snapshot;
+import static org.infinispan.transaction.impl.WriteSkewHelper.versionFromEntry;
 
 /**
  * Always at the end of the chain, directly in front of the cache. Simply calls into the cache using reflection. If the
@@ -158,8 +119,8 @@ public class CallInterceptor extends BaseAsyncInterceptor implements Visitor {
    @Override
    public Object visitCommand(InvocationContext ctx, VisitableCommand command)
          throws Throwable {
-      if (log.isTraceEnabled())
-         log.tracef("Invoking: %s", command.getClass().getSimpleName());
+      if(command instanceof GetKeyValueCommand || command instanceof PutKeyValueCommand)
+         return handleCommand(ctx, command);
       return command.acceptVisitor(ctx, this);
    }
 
@@ -652,6 +613,17 @@ public class CallInterceptor extends BaseAsyncInterceptor implements Visitor {
       }
 
       return segments;
+   }
+
+   @Override
+   public Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+      switch(command.getCommandId()) {
+         case GetKeyValueCommand.COMMAND_ID:
+            return visitGetKeyValueCommand(ctx, (GetKeyValueCommand)command);
+         case PutKeyValueCommand.COMMAND_ID:
+            return visitPutKeyValueCommand(ctx, (PutKeyValueCommand)command);
+      }
+      return null;
    }
 
    @Override

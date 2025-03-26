@@ -1,6 +1,7 @@
 package org.infinispan.interceptors.impl;
 
 import org.infinispan.commands.MetadataAwareCommand;
+import org.infinispan.commands.VisitableCommand;
 import org.infinispan.commands.write.ReplaceCommand;
 import org.infinispan.container.versioning.VersionGenerator;
 import org.infinispan.context.InvocationContext;
@@ -31,5 +32,15 @@ public class VersionInterceptor extends DDAsyncInterceptor {
                .build();
          cmd.setMetadata(newMetadata);
       }
+   }
+
+   @Override
+   public Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+      switch(command.getCommandId()) {
+         case ReplaceCommand.COMMAND_ID:
+            addVersionIfNeeded((ReplaceCommand)command);
+            break;
+      }
+      return callNext(ctx, command);
    }
 }

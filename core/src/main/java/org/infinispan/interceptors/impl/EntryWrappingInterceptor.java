@@ -1,55 +1,22 @@
 package org.infinispan.interceptors.impl;
 
-import static org.infinispan.commons.util.Util.toStr;
-import static org.infinispan.container.impl.EntryFactory.expirationCheckDelay;
-
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-
 import org.infinispan.commands.AbstractVisitor;
 import org.infinispan.commands.DataCommand;
 import org.infinispan.commands.FlagAffectedCommand;
 import org.infinispan.commands.VisitableCommand;
-import org.infinispan.commands.functional.FunctionalCommand;
-import org.infinispan.commands.functional.ReadOnlyKeyCommand;
-import org.infinispan.commands.functional.ReadOnlyManyCommand;
-import org.infinispan.commands.functional.ReadWriteKeyCommand;
-import org.infinispan.commands.functional.ReadWriteKeyValueCommand;
-import org.infinispan.commands.functional.ReadWriteManyCommand;
-import org.infinispan.commands.functional.ReadWriteManyEntriesCommand;
-import org.infinispan.commands.functional.TxReadOnlyKeyCommand;
-import org.infinispan.commands.functional.TxReadOnlyManyCommand;
-import org.infinispan.commands.functional.WriteOnlyKeyCommand;
-import org.infinispan.commands.functional.WriteOnlyKeyValueCommand;
-import org.infinispan.commands.functional.WriteOnlyManyCommand;
-import org.infinispan.commands.functional.WriteOnlyManyEntriesCommand;
+import org.infinispan.commands.functional.*;
 import org.infinispan.commands.read.AbstractDataCommand;
 import org.infinispan.commands.read.GetAllCommand;
 import org.infinispan.commands.read.GetCacheEntryCommand;
 import org.infinispan.commands.read.GetKeyValueCommand;
 import org.infinispan.commands.tx.CommitCommand;
 import org.infinispan.commands.tx.PrepareCommand;
-import org.infinispan.commands.write.AbstractDataWriteCommand;
-import org.infinispan.commands.write.ClearCommand;
-import org.infinispan.commands.write.ComputeCommand;
-import org.infinispan.commands.write.ComputeIfAbsentCommand;
-import org.infinispan.commands.write.DataWriteCommand;
-import org.infinispan.commands.write.EvictCommand;
-import org.infinispan.commands.write.InvalidateCommand;
-import org.infinispan.commands.write.InvalidateL1Command;
-import org.infinispan.commands.write.IracPutKeyValueCommand;
-import org.infinispan.commands.write.PutKeyValueCommand;
-import org.infinispan.commands.write.PutMapCommand;
-import org.infinispan.commands.write.RemoveCommand;
-import org.infinispan.commands.write.RemoveExpiredCommand;
-import org.infinispan.commands.write.ReplaceCommand;
-import org.infinispan.commands.write.WriteCommand;
+import org.infinispan.commands.write.*;
 import org.infinispan.commons.util.IntSet;
 import org.infinispan.commons.util.IntSets;
+import org.infinispan.commons.util.concurrent.AggregateCompletionStage;
 import org.infinispan.commons.util.concurrent.CompletableFutures;
+import org.infinispan.commons.util.concurrent.CompletionStages;
 import org.infinispan.configuration.cache.Configurations;
 import org.infinispan.configuration.cache.IsolationLevel;
 import org.infinispan.container.entries.CacheEntry;
@@ -83,11 +50,18 @@ import org.infinispan.statetransfer.StateConsumer;
 import org.infinispan.statetransfer.StateTransferLock;
 import org.infinispan.transaction.LockingMode;
 import org.infinispan.transaction.impl.WriteSkewHelper;
-import org.infinispan.commons.util.concurrent.AggregateCompletionStage;
-import org.infinispan.commons.util.concurrent.CompletionStages;
 import org.infinispan.util.logging.Log;
 import org.infinispan.util.logging.LogFactory;
 import org.infinispan.xsite.statetransfer.XSiteStateConsumer;
+
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
+import static org.infinispan.commons.util.Util.toStr;
+import static org.infinispan.container.impl.EntryFactory.expirationCheckDelay;
 
 /**
  * Interceptor in charge with wrapping entries and add them in caller's context.
@@ -204,6 +178,33 @@ public class EntryWrappingInterceptor extends DDAsyncInterceptor {
    @Override
    public Object visitCommitCommand(TxInvocationContext ctx, CommitCommand command) throws Throwable {
       return invokeNextAndHandle(ctx, command, commitEntriesFinallyHandler);
+   }
+
+   @Override
+   public Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+      switch(command.getCommandId()) {
+         case GetKeyValueCommand.COMMAND_ID:
+            GetKeyValueCommand cmd=(GetKeyValueCommand)command;
+            final Object key = cmd.getKey();
+            CompletionStage<Void> stage = entryFactory.wrapEntryForReading(ctx, key, cmd.getSegment(),
+                                                                           ignoreOwnership(cmd) || canRead(cmd), cmd.hasAnyFlag(FlagBitSets.ALREADY_HAS_LOCK)
+                                                                             || (isPessimistic && cmd.hasAnyFlag(FlagBitSets.FORCE_WRITE_LOCK)), CompletableFutures.completedNull());
+            // return makeStage(asyncCallNext(ctx, command, stage)).thenApply(ctx, cmd, dataReadReturnHandler);
+            // return makeStage(callNext(ctx, command)); //.thenApply(ctx, cmd, dataReadReturnHandler);
+            return callNext(ctx, command);
+         case PutKeyValueCommand.COMMAND_ID:
+            return handlePutKeyValueCommand(ctx, (PutKeyValueCommand)command);
+      }
+      // return callNext(ctx, command);
+      try {
+         if (nextDDInterceptor != null) {
+            return nextDDInterceptor.handleCommand(ctx, command);
+         } else {
+            return nextInterceptor.visitCommand(ctx, command);
+         }
+      } catch (Throwable throwable) {
+         return new ExceptionSyncInvocationStage(throwable);
+      }
    }
 
    @Override
@@ -333,6 +334,10 @@ public class EntryWrappingInterceptor extends DDAsyncInterceptor {
    @Override
    public final Object visitPutKeyValueCommand(InvocationContext ctx, PutKeyValueCommand command) {
       return setSkipRemoteGetsAndInvokeNextForDataCommand(ctx, command, wrapEntryIfNeeded(ctx, command));
+   }
+
+   public final Object handlePutKeyValueCommand(InvocationContext ctx, PutKeyValueCommand command) {
+      return setSkipRemoteGetsAndCallNextForDataCommand(ctx, command, wrapEntryIfNeeded(ctx, command));
    }
 
    @Override
@@ -730,6 +735,11 @@ public class EntryWrappingInterceptor extends DDAsyncInterceptor {
    protected Object setSkipRemoteGetsAndInvokeNextForDataCommand(InvocationContext ctx,
                                                                DataWriteCommand command, CompletionStage<Void> delay) {
       return makeStage(asyncInvokeNext(ctx, command, delay)).thenApply(ctx, command, applyAndFixVersion);
+   }
+
+   protected Object setSkipRemoteGetsAndCallNextForDataCommand(InvocationContext ctx,
+                                                               DataWriteCommand command, CompletionStage<Void> delay) {
+      return makeStage(asyncCallNext(ctx, command, delay)).thenApply(ctx, command, applyAndFixVersion);
    }
 
    private Object applyAndFixVersion(InvocationContext ctx, DataWriteCommand dataWriteCommand, Object rv) {

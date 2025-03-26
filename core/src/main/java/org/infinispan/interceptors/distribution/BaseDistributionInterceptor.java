@@ -1,22 +1,6 @@
 package org.infinispan.interceptors.distribution;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletionStage;
-import java.util.function.BiConsumer;
-import java.util.function.Function;
-import java.util.stream.Stream;
-
-import org.infinispan.commands.FlagAffectedCommand;
-import org.infinispan.commands.ReplicableCommand;
-import org.infinispan.commands.SegmentSpecificCommand;
-import org.infinispan.commands.TopologyAffectedCommand;
-import org.infinispan.commands.VisitableCommand;
+import org.infinispan.commands.*;
 import org.infinispan.commands.functional.ReadOnlyKeyCommand;
 import org.infinispan.commands.functional.ReadOnlyManyCommand;
 import org.infinispan.commands.read.AbstractDataCommand;
@@ -25,11 +9,7 @@ import org.infinispan.commands.read.GetCacheEntryCommand;
 import org.infinispan.commands.read.GetKeyValueCommand;
 import org.infinispan.commands.remote.BaseClusteredReadCommand;
 import org.infinispan.commands.remote.ClusteredGetCommand;
-import org.infinispan.commands.write.AbstractDataWriteCommand;
-import org.infinispan.commands.write.ClearCommand;
-import org.infinispan.commands.write.DataWriteCommand;
-import org.infinispan.commands.write.ValueMatcher;
-import org.infinispan.commands.write.WriteCommand;
+import org.infinispan.commands.write.*;
 import org.infinispan.commons.time.TimeService;
 import org.infinispan.commons.util.ArrayCollector;
 import org.infinispan.commons.util.concurrent.CompletableFutures;
@@ -51,12 +31,7 @@ import org.infinispan.factories.annotations.Start;
 import org.infinispan.interceptors.InvocationSuccessFunction;
 import org.infinispan.interceptors.impl.ClusteringInterceptor;
 import org.infinispan.remoting.inboundhandler.DeliverOrder;
-import org.infinispan.remoting.responses.CacheNotFoundResponse;
-import org.infinispan.remoting.responses.ExceptionResponse;
-import org.infinispan.remoting.responses.Response;
-import org.infinispan.remoting.responses.SuccessfulResponse;
-import org.infinispan.remoting.responses.UnsureResponse;
-import org.infinispan.remoting.responses.ValidResponse;
+import org.infinispan.remoting.responses.*;
 import org.infinispan.remoting.rpc.RpcOptions;
 import org.infinispan.remoting.transport.Address;
 import org.infinispan.remoting.transport.ResponseCollector;
@@ -69,6 +44,12 @@ import org.infinispan.transaction.xa.GlobalTransaction;
 import org.infinispan.util.CacheTopologyUtil;
 import org.infinispan.util.logging.Log;
 import org.infinispan.util.logging.LogFactory;
+
+import java.util.*;
+import java.util.concurrent.CompletionStage;
+import java.util.function.BiConsumer;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 /**
  * Base class for distribution of entries across a cluster.
@@ -599,6 +580,26 @@ public abstract class BaseDistributionInterceptor extends ClusteringInterceptor 
 
    protected Object[] unwrapFunctionalManyResultOnOrigin(InvocationContext ctx, List<Object> keys, Object responseValue) {
       return responseValue instanceof Object[] ? (Object[]) responseValue : null;
+   }
+
+   @Override
+   public Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+      switch(command.getCommandId()) {
+         case GetKeyValueCommand.COMMAND_ID:
+            GetKeyValueCommand cmd=(GetKeyValueCommand)command;
+            if (ctx.lookupEntry(cmd.getKey()) != null) {
+               return callNext(ctx, command);
+            }
+
+            if (!ctx.isOriginLocal())
+               return UnsureResponse.INSTANCE;
+
+            if (!readNeedsRemoteValue(cmd))
+               return null;
+
+            return asyncCallNext(ctx, command, remoteGetSingleKey(ctx, cmd, cmd.getKey(), false));
+      }
+      return callNext(ctx, command);
    }
 
    private Object visitGetCommand(InvocationContext ctx, AbstractDataCommand command) throws Throwable {

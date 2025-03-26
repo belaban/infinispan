@@ -23,6 +23,10 @@ public interface AsyncInterceptor {
     */
    Object visitCommand(InvocationContext ctx, VisitableCommand command) throws Throwable;
 
+   default Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+      return visitCommand(ctx, command);
+   }
+
    /**
     * Sets up the interceptor. Do not call explicitly.
     */

@@ -8,6 +8,7 @@ import java.util.List;
 import org.infinispan.InvalidCacheUsageException;
 import org.infinispan.commands.DataCommand;
 import org.infinispan.commands.FlagAffectedCommand;
+import org.infinispan.commands.VisitableCommand;
 import org.infinispan.commands.write.DataWriteCommand;
 import org.infinispan.commands.write.InvalidateCommand;
 import org.infinispan.commands.write.WriteCommand;
@@ -27,6 +28,16 @@ public class NonTransactionalLockingInterceptor extends AbstractLockingIntercept
    @Override
    protected Log getLog() {
       return log;
+   }
+
+   @Override
+   public Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+      switch(command.getCommandId()) {
+         case org.infinispan.commands.read.GetKeyValueCommand.COMMAND_ID:
+            assertNonTransactional(ctx);
+            return callNext(ctx, command);
+      }
+      return callNext(ctx, command);
    }
 
    @Override

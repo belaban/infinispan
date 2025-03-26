@@ -46,6 +46,11 @@ import org.infinispan.expiration.impl.TouchCommand;
 public abstract class DDAsyncInterceptor extends BaseAsyncInterceptor implements Visitor {
 
    @Override
+   public Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+     return callNext(ctx, command);
+   }
+
+   @Override
    public final Object visitCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
       return command.acceptVisitor(ctx, this);
    }

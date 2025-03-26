@@ -1,11 +1,8 @@
 package org.infinispan.interceptors.impl;
 
-import static org.infinispan.commons.util.Util.toStr;
-import static org.infinispan.util.logging.Log.CONTAINER;
-
-import java.util.Collection;
-import java.util.Collections;
-
+import jakarta.transaction.Status;
+import jakarta.transaction.SystemException;
+import jakarta.transaction.Transaction;
 import org.infinispan.InvalidCacheUsageException;
 import org.infinispan.commands.FlagAffectedCommand;
 import org.infinispan.commands.VisitableCommand;
@@ -32,9 +29,11 @@ import org.infinispan.util.UserRaisedFunctionalException;
 import org.infinispan.util.logging.Log;
 import org.infinispan.util.logging.LogFactory;
 
-import jakarta.transaction.Status;
-import jakarta.transaction.SystemException;
-import jakarta.transaction.Transaction;
+import java.util.Collection;
+import java.util.Collections;
+
+import static org.infinispan.commons.util.Util.toStr;
+import static org.infinispan.util.logging.Log.CONTAINER;
 
 /**
  * @author Mircea.Markus@jboss.com
@@ -73,6 +72,19 @@ public class InvocationContextInterceptor extends BaseAsyncInterceptor {
    @Stop
    void setStopStatus() {
       shuttingDown = true;
+   }
+
+   @Override
+   public Object handleCommand(InvocationContext ctx, VisitableCommand command) throws Throwable {
+      if (ctx == null)
+         throw new IllegalStateException("Null context not allowed!!");
+
+      ComponentStatus status = componentRegistry.getStatus();
+      if (!status.allowInvocations()) {
+         ignoreCommand(ctx, command, status);
+      }
+
+      return callNextAndExceptionally(ctx, command, suppressExceptionsHandler);
    }
 
    @Override
