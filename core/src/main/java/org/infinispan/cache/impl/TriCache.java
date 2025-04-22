@@ -159,7 +159,9 @@ public abstract class TriCache<K,V> implements Receiver, Closeable, Runnable, Di
         if(primary == null)
             throw new IllegalArgumentException("primary must not be null");
 
-        boolean get_is_local=Objects.equals(primary, local_addr) ||
+        // changed April 2025 (bela): inlined Objects.equals()
+        boolean get_is_local=primary == local_addr ||
+          primary.equals(local_addr) ||
           (!only_primary_handles_gets && Objects.equals(getBackup(primary), local_addr));
         if(get_is_local) {
             if(is_trace)
