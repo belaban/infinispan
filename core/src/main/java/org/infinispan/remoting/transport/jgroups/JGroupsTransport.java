@@ -1,40 +1,5 @@
 package org.infinispan.remoting.transport.jgroups;
 
-import static org.infinispan.util.logging.Log.CLUSTER;
-import static org.infinispan.util.logging.Log.CONTAINER;
-import static org.infinispan.util.logging.Log.XSITE;
-
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.URL;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.Properties;
-import java.util.Set;
-import java.util.TreeSet;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Function;
-import java.util.function.Supplier;
-
-import javax.management.ObjectName;
-import javax.sql.DataSource;
-
 import org.infinispan.commands.ReplicableCommand;
 import org.infinispan.commands.TracedCommand;
 import org.infinispan.commons.CacheConfigurationException;
@@ -70,27 +35,12 @@ import org.infinispan.remoting.inboundhandler.Reply;
 import org.infinispan.remoting.responses.CacheNotFoundResponse;
 import org.infinispan.remoting.responses.ExceptionResponse;
 import org.infinispan.remoting.responses.Response;
-import org.infinispan.remoting.responses.SuccessfulResponse;
 import org.infinispan.remoting.rpc.ResponseFilter;
 import org.infinispan.remoting.rpc.ResponseMode;
-import org.infinispan.remoting.transport.AbstractRequest;
+import org.infinispan.remoting.transport.*;
 import org.infinispan.remoting.transport.Address;
-import org.infinispan.remoting.transport.NodeVersion;
 import org.infinispan.remoting.transport.PhysicalAddress;
-import org.infinispan.remoting.transport.ResponseCollector;
-import org.infinispan.remoting.transport.Transport;
-import org.infinispan.remoting.transport.XSiteResponse;
-import org.infinispan.remoting.transport.impl.EmptyRaftManager;
-import org.infinispan.remoting.transport.impl.FilterMapResponseCollector;
-import org.infinispan.remoting.transport.impl.MapResponseCollector;
-import org.infinispan.remoting.transport.impl.MultiTargetRequest;
-import org.infinispan.remoting.transport.impl.Request;
-import org.infinispan.remoting.transport.impl.RequestRepository;
-import org.infinispan.remoting.transport.impl.SingleResponseCollector;
-import org.infinispan.remoting.transport.impl.SingleTargetRequest;
-import org.infinispan.remoting.transport.impl.SingletonMapResponseCollector;
-import org.infinispan.remoting.transport.impl.SiteUnreachableXSiteResponse;
-import org.infinispan.remoting.transport.impl.XSiteResponseImpl;
+import org.infinispan.remoting.transport.impl.*;
 import org.infinispan.remoting.transport.raft.RaftManager;
 import org.infinispan.telemetry.InfinispanSpan;
 import org.infinispan.telemetry.InfinispanTelemetry;
@@ -100,27 +50,14 @@ import org.infinispan.util.logging.Log;
 import org.infinispan.util.logging.LogFactory;
 import org.infinispan.xsite.XSiteBackup;
 import org.infinispan.xsite.commands.remote.XSiteRequest;
-import org.jgroups.BytesMessage;
-import org.jgroups.ChannelListener;
-import org.jgroups.Event;
-import org.jgroups.Header;
-import org.jgroups.JChannel;
-import org.jgroups.MergeView;
-import org.jgroups.Message;
-import org.jgroups.MessageFactory;
-import org.jgroups.UpHandler;
-import org.jgroups.View;
+import org.jgroups.*;
 import org.jgroups.blocks.RequestCorrelator;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.fork.ForkChannel;
 import org.jgroups.jmx.JmxConfigurator;
 import org.jgroups.protocols.FORK;
-import org.jgroups.protocols.relay.RELAY;
-import org.jgroups.protocols.relay.RELAY2;
-import org.jgroups.protocols.relay.RouteStatusListener;
-import org.jgroups.protocols.relay.SiteAddress;
-import org.jgroups.protocols.relay.SiteMaster;
-import org.jgroups.protocols.relay.SiteUUID;
+import org.jgroups.protocols.TP;
+import org.jgroups.protocols.relay.*;
 import org.jgroups.stack.AddressGenerator;
 import org.jgroups.stack.IpAddress;
 import org.jgroups.stack.Protocol;
@@ -128,6 +65,22 @@ import org.jgroups.stack.ProtocolStack;
 import org.jgroups.util.ExtendedUUID;
 import org.jgroups.util.MessageBatch;
 import org.jgroups.util.SocketFactory;
+
+import javax.management.ObjectName;
+import javax.sql.DataSource;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+import static org.infinispan.util.logging.Log.*;
 
 /**
  * An encapsulation of a JGroups transport. JGroups transports can be configured using a variety of methods, usually by
@@ -214,9 +167,6 @@ public class JGroupsTransport implements Transport {
       return channel.getProtocolStack().findProtocol(FORK.class);
    }
 
-   static {
-      MessageFactory.register(InfinispanMessage.TYPE, InfinispanMessage::new);
-   }
 
    /**
     * This form is used when the transport is created by an external source and passed in to the GlobalConfiguration.
@@ -461,6 +411,16 @@ public class JGroupsTransport implements Transport {
       requests = new RequestRepository();
 
       initChannel();
+
+      // register InfinispanMessage with the correct marshaller:
+      Supplier<Message> msg_creator=() -> new InfinispanMessage().setMarshaller(this.marshaller);
+      MessageFactory mf=new MessageFactory(); // .registerDefaultTypes();
+      mf.register(InfinispanMessage.TYPE, msg_creator);
+
+      // don't register default types; we use the MessageFactory singleton to look up other messages; this instance
+      // is used *only* for InfinispanMessage creation. Other messages won't be seen in JGroupsTransport anyway
+      TP transport=channel.stack().getTransport();
+      transport.setMessageFactory(mf);
 
       channel.setUpHandler(channelCallbacks);
       setXSiteViewListener(channelCallbacks);
@@ -1182,31 +1142,20 @@ public class JGroupsTransport implements Transport {
    }
 
    void doSendForCrossSite(SiteAddress target, Object command, long requestId, DeliverOrder deliverOrder) {
-      Message message = new BytesMessage(target);
-      marshallRequest(message, command, requestId);
+      Message message = new InfinispanMessage(target, command).setMarshaller(this.marshaller);
+      addRequestHeader(message, requestId);
       setMessageFlagsForCrossSite(message, deliverOrder);
       send(message);
    }
 
    void doSendForCluster(Address address, ExtendedUUID target, Object command, long requestId, DeliverOrder deliverOrder) {
-      Message message = new BytesMessage(target);
-      marshallRequest(message, command, requestId);
+      Message message = new InfinispanMessage(target, command).setMarshaller(this.marshaller);
+      addRequestHeader(message, requestId);
       setMessageFlagsForCluster(message, deliverOrder);
       send(message);
       metricsManager.recordMessageSent(address, message.size(), requestId == Request.NO_REQUEST_ID);
    }
 
-   private void marshallRequest(Message message, Object command, long requestId) {
-      try {
-         ByteBuffer bytes = marshaller.objectToBuffer(command);
-         message.setArray(bytes.getBuf(), bytes.getOffset(), bytes.getLength());
-         addRequestHeader(message, requestId);
-      } catch (RuntimeException e) {
-         throw e;
-      } catch (Exception e) {
-         throw new RuntimeException("Failure to marshal argument(s)", e);
-      }
-   }
 
    private static void setMessageFlagsForCrossSite(Message message, DeliverOrder deliverOrder) {
       message.setFlag(encodeDeliverMode(deliverOrder), false);
@@ -1334,8 +1283,8 @@ public class JGroupsTransport implements Transport {
     * Send a command to the entire cluster.
     */
    private void sendCommandToAll(ReplicableCommand command, long requestId, DeliverOrder deliverOrder) {
-      Message message = new BytesMessage();
-      marshallRequest(message, command, requestId);
+      Message message = new InfinispanMessage().setObject(command).setMarshaller(this.marshaller);
+      addRequestHeader(message, requestId);
       setMessageFlagsForCluster(message, deliverOrder);
       send(message);
       clusterView.getMembersSet().stream()
@@ -1401,8 +1350,8 @@ public class JGroupsTransport implements Transport {
    private void sendCommand(Collection<Address> targets, ReplicableCommand command, long requestId,
                             DeliverOrder deliverOrder) {
       Objects.requireNonNull(targets);
-      Message message = new BytesMessage();
-      marshallRequest(message, command, requestId);
+      Message message = new InfinispanMessage().setObject(command).setMarshaller(this.marshaller);
+      addRequestHeader(message, requestId);
       setMessageFlagsForCluster(message, deliverOrder);
 
       Message copy = message;
@@ -1439,10 +1388,8 @@ public class JGroupsTransport implements Transport {
 
    void processMessage(Message message) {
       org.jgroups.Address src = message.src();
+      Object command=message.getObject();
       short flags = message.getFlags();
-      byte[] buffer = message.getArray();
-      int offset = message.getOffset();
-      int length = message.getLength();
       RequestCorrelator.Header header = message.getHeader(HEADER_ID);
       byte type;
       long requestId;
@@ -1464,10 +1411,10 @@ public class JGroupsTransport implements Transport {
       switch (type) {
          case SINGLE_MESSAGE:
          case REQUEST:
-            processRequest(src, flags, buffer, offset, length, requestId);
+            processRequest(src, flags, command, requestId);
             break;
          case RESPONSE:
-            processResponse(src, buffer, offset, length, requestId);
+            processResponse(src, command, requestId);
             break;
          default:
             CLUSTER.invalidMessageType(type, src);
@@ -1477,21 +1424,22 @@ public class JGroupsTransport implements Transport {
    private void sendResponse(org.jgroups.Address target, Response response, long requestId, Object command) {
       if (log.isTraceEnabled())
          log.tracef("%s sending response for request %d to %s: %s", getAddress(), requestId, target, response);
-      ByteBuffer bytes;
       JChannel channel = this.channel;
       if (channel == null) {
          // Avoid NPEs during stop()
          return;
       }
+      Message message = new InfinispanMessage(target).setMarshaller(this.marshaller)
+        .setFlag(REPLY_FLAGS, false);
       try {
          // If no response, then send a buffer containing a single byte. An empty payload is not possible,
          // as this can also signify to a receiver that the ForkChannel is not running on this node.
-         bytes = response == null ? EMPTY_MESSAGE_BUFFER : marshaller.objectToBuffer(response);
+         message.setObject(response);
       } catch (Throwable t) {
          try {
             // this call should succeed (all exceptions are serializable)
             Exception e = t instanceof Exception ? ((Exception) t) : new CacheException(t);
-            bytes = marshaller.objectToBuffer(new ExceptionResponse(e));
+            message.setObject(new ExceptionResponse(e));
          } catch (Throwable tt) {
             if (channel.isConnected()) {
                CLUSTER.errorSendingResponse(requestId, target, command);
@@ -1501,8 +1449,6 @@ public class JGroupsTransport implements Transport {
       }
 
       try {
-         Message message = new BytesMessage(target).setFlag(REPLY_FLAGS, false);
-         message.setArray(bytes.getBuf(), bytes.getOffset(), bytes.getLength());
          RequestCorrelator.Header header = new RequestCorrelator.Header(RESPONSE, requestId,
                CORRELATOR_ID);
          message.putHeader(HEADER_ID, header);
@@ -1515,8 +1461,7 @@ public class JGroupsTransport implements Transport {
       }
    }
 
-   private void processRequest(org.jgroups.Address src, short flags, byte[] buffer, int offset, int length,
-                               long requestId) {
+   private void processRequest(org.jgroups.Address src, short flags, Object command, long requestId) {
       try {
          DeliverOrder deliverOrder = decodeDeliverMode(flags);
          if (Objects.equals(src, channel.getAddress())) {
@@ -1526,7 +1471,6 @@ public class JGroupsTransport implements Transport {
             return;
          }
 
-         Object command = marshaller.objectFromByteBuffer(buffer, offset, length);
          Reply reply;
          if (requestId != Request.NO_REQUEST_ID) {
             if (log.isTraceEnabled())
@@ -1554,16 +1498,14 @@ public class JGroupsTransport implements Transport {
       }
    }
 
-   private void processResponse(org.jgroups.Address src, byte[] buffer, int offset, int length, long requestId) {
+   private void processResponse(org.jgroups.Address src, Object command, long requestId) {
       try {
          Response response;
-         if (length == 0) {
+         if (command == null) {
             // Empty buffer signals the ForkChannel with this name is not running on the remote node
             response = CacheNotFoundResponse.INSTANCE;
-         } else if (length == 1 && buffer[0] == EMPTY_MESSAGE_BYTE) {
-            response = SuccessfulResponse.SUCCESSFUL_EMPTY_RESPONSE;
          } else {
-            response = (Response) marshaller.objectFromByteBuffer(buffer, offset, length);
+            response = (Response) command;
          }
          if (log.isTraceEnabled())
             log.tracef("%s received response for request %d from %s: %s", getAddress(), requestId, src, response);
