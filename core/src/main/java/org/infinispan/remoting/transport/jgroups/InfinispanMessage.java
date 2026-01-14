@@ -5,14 +5,16 @@ import org.infinispan.marshall.protostream.impl.GlobalMarshaller;
 import org.jgroups.util.*;
 
 import java.io.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 // TODO: we don't actually use this yet, just reserve the type id for future usage
 public class InfinispanMessage extends org.jgroups.BaseMessage {
    // can be null or a SizeStreamable or an ObjectWrapper (also SizeStreamable)
-   protected Object             obj; // change to AbstractDataCommand, CacheRpcCommand, ReplicableCommand?
-   protected GlobalMarshaller   marshaller;
-   protected static final short TYPE=1005;
+   protected Object              obj; // change to AbstractDataCommand, CacheRpcCommand, ReplicableCommand?
+   protected GlobalMarshaller    marshaller;
+   protected final AtomicInteger cached_size=new AtomicInteger();
+   protected static final short  TYPE=1005;
 
 
    public InfinispanMessage() {
@@ -41,17 +43,6 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
       setObject(obj);
    }
 
-   /**
-    * Constructs a message given a destination address and the payload object
-    * @param dest The Address of the receiver. If it is null, then the message is sent to the group. Otherwise, it is
-    *             sent to a single member.
-    * @param obj The {@link SizeStreamable} object to be used as payload. Note that this constructor has fewer
-    *            checks (e.g. instanceof) than {@link .InfinispanMessage (Address, Object)}.
-    */
-   public InfinispanMessage(org.jgroups.Address dest, SizeStreamable obj) {
-      super(dest);
-      setObject(obj);
-   }
 
 
 
@@ -81,9 +72,16 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    }
 
    public void writePayload(DataOutput out) throws IOException {
-      OutputStreamAdapter outstream=new OutputStreamAdapter((ByteArrayDataOutputStream)out);
+      OutputStream outstream=out instanceof OutputStream? (OutputStream)out
+        : new OutputStreamAdapter((ByteArrayDataOutputStream)out);
       try {
+         if(obj == null) {
+            out.writeByte(-1);
+            return;
+         }
+         out.writeByte(1);
          marshaller.writeObject(obj, outstream);
+         outstream.write(0);
       }
       catch(Throwable t) {
          System.err.printf("exception: %s\n", t);
@@ -92,6 +90,9 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
 
    public void readPayload(DataInput in) throws IOException, ClassNotFoundException {
       try {
+         byte is_null=in.readByte();
+         if(is_null == -1)
+            return;
          this.obj=marshaller.readObject((InputStream)in);
       }
       catch(Throwable t) {
@@ -102,6 +103,7 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    @Override protected org.jgroups.Message copyPayload(org.jgroups.Message copy) {
       if(obj != null)
          ((InfinispanMessage)copy).setObject(obj);
+      ((InfinispanMessage)copy).cached_size.compareAndSet(0, cached_size.get());
       return copy;
    }
 
@@ -110,6 +112,25 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    }
 
    @Override protected int payloadSize() {
-      return marshaller.sizeEstimate(obj);
+      if(obj == null)
+         return 0;
+      int s=cached_size.get();
+      if(s > 0)
+         return s;
+      // cached_size.compareAndSet(0, actualSize());
+      return cached_size.updateAndGet(old -> actualSize());
+   }
+
+   protected int actualSize() {
+      if(obj == null)
+         return 0;
+      SizeCountingOutputStream out=new SizeCountingOutputStream();
+      try {
+         marshaller.writeObject(obj, out);
+         return out.size();
+      }
+      catch(IOException e) {
+         throw new RuntimeException(e);
+      }
    }
 }

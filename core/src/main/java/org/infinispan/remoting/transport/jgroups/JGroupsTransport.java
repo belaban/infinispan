@@ -1283,7 +1283,7 @@ public class JGroupsTransport implements Transport {
     * Send a command to the entire cluster.
     */
    private void sendCommandToAll(ReplicableCommand command, long requestId, DeliverOrder deliverOrder) {
-      Message message = new InfinispanMessage().setObject(command).setMarshaller(this.marshaller);
+      Message message = new InfinispanMessage(null, command).setMarshaller(this.marshaller);
       addRequestHeader(message, requestId);
       setMessageFlagsForCluster(message, deliverOrder);
       send(message);
@@ -1350,7 +1350,7 @@ public class JGroupsTransport implements Transport {
    private void sendCommand(Collection<Address> targets, ReplicableCommand command, long requestId,
                             DeliverOrder deliverOrder) {
       Objects.requireNonNull(targets);
-      Message message = new InfinispanMessage().setObject(command).setMarshaller(this.marshaller);
+      Message message = new InfinispanMessage(null, command).setMarshaller(this.marshaller);
       addRequestHeader(message, requestId);
       setMessageFlagsForCluster(message, deliverOrder);
 
