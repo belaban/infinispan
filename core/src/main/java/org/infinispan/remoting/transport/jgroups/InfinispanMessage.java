@@ -2,6 +2,7 @@ package org.infinispan.remoting.transport.jgroups;
 
 import org.infinispan.commons.marshall.Marshaller;
 import org.infinispan.marshall.protostream.impl.GlobalMarshaller;
+import org.infinispan.remoting.responses.SuccessfulResponse;
 import org.jgroups.util.*;
 
 import java.io.*;
@@ -92,8 +93,9 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
       try {
          byte is_null=in.readByte();
          if(is_null == -1)
-            return;
-         this.obj=marshaller.readObject((InputStream)in);
+            this.obj=SuccessfulResponse.SUCCESSFUL_EMPTY_RESPONSE;
+         else
+            this.obj=marshaller.readObject((InputStream)in);
       }
       catch(Throwable t) {
          System.err.printf("-- exception: %s\n", t);
