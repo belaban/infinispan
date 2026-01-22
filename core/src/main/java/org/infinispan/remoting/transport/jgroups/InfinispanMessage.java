@@ -8,12 +8,11 @@ import org.jgroups.util.*;
 import java.io.*;
 import java.util.function.Supplier;
 
-// TODO: we don't actually use this yet, just reserve the type id for future usage
 public class InfinispanMessage extends org.jgroups.BaseMessage {
    // can be null or a SizeStreamable or an ObjectWrapper (also SizeStreamable)
    protected Object              obj; // change to AbstractDataCommand, CacheRpcCommand, ReplicableCommand?
    protected GlobalMarshaller    marshaller;
-   protected volatile int        cached_size; // look into replacing with VarHandle
+   protected volatile int        cached_size=-1; // look into replacing with VarHandle
    protected static final short  TYPE=1005;
 
 
@@ -64,6 +63,8 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
     */
    public InfinispanMessage setObject(Object obj) {
       this.obj=obj;
+      if(obj == null)
+         cached_size=0;
       return this;
    }
 
@@ -91,10 +92,15 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    public void readPayload(DataInput in) throws IOException, ClassNotFoundException {
       try {
          byte is_null=in.readByte();
-         if(is_null == -1)
+         if(is_null == -1) {
             this.obj=SuccessfulResponse.SUCCESSFUL_EMPTY_RESPONSE;
-         else
-            this.obj=marshaller.readObject((InputStream)in);
+            cached_size=0;
+         }
+         else {
+            SizeCountingInputStream tmp=new SizeCountingInputStream((InputStream)in);
+            this.obj=marshaller.readObject(tmp);
+            cached_size=tmp.position();
+         }
       }
       catch(Throwable t) {
          System.err.printf("-- exception: %s\n", t);
@@ -116,7 +122,7 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
       if(obj == null)
          return 0;
       int tmp=cached_size; // volatile read
-      if(tmp > 0)
+      if(tmp >= 0)
          return tmp;
       return cached_size=actualSize();
    }
