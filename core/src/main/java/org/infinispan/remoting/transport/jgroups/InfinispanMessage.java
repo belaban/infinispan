@@ -6,7 +6,6 @@ import org.infinispan.remoting.responses.SuccessfulResponse;
 import org.jgroups.util.*;
 
 import java.io.*;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 // TODO: we don't actually use this yet, just reserve the type id for future usage
@@ -14,7 +13,7 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    // can be null or a SizeStreamable or an ObjectWrapper (also SizeStreamable)
    protected Object              obj; // change to AbstractDataCommand, CacheRpcCommand, ReplicableCommand?
    protected GlobalMarshaller    marshaller;
-   protected final AtomicInteger cached_size=new AtomicInteger();
+   protected volatile int        cached_size; // look into replacing with VarHandle
    protected static final short  TYPE=1005;
 
 
@@ -105,7 +104,7 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    @Override protected org.jgroups.Message copyPayload(org.jgroups.Message copy) {
       if(obj != null)
          ((InfinispanMessage)copy).setObject(obj);
-      ((InfinispanMessage)copy).cached_size.compareAndSet(0, cached_size.get());
+      ((InfinispanMessage)copy).cached_size=cached_size;
       return copy;
    }
 
@@ -116,11 +115,10 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    @Override protected int payloadSize() {
       if(obj == null)
          return 0;
-      int s=cached_size.get();
-      if(s > 0)
-         return s;
-      // cached_size.compareAndSet(0, actualSize());
-      return cached_size.updateAndGet(old -> actualSize());
+      int tmp=cached_size; // volatile read
+      if(tmp > 0)
+         return tmp;
+      return cached_size=actualSize();
    }
 
    protected int actualSize() {
