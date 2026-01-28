@@ -35,6 +35,7 @@ import org.infinispan.remoting.inboundhandler.Reply;
 import org.infinispan.remoting.responses.CacheNotFoundResponse;
 import org.infinispan.remoting.responses.ExceptionResponse;
 import org.infinispan.remoting.responses.Response;
+import org.infinispan.remoting.responses.SuccessfulResponse;
 import org.infinispan.remoting.rpc.ResponseFilter;
 import org.infinispan.remoting.rpc.ResponseMode;
 import org.infinispan.remoting.transport.*;
@@ -56,7 +57,6 @@ import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.fork.ForkChannel;
 import org.jgroups.jmx.JmxConfigurator;
 import org.jgroups.protocols.FORK;
-import org.jgroups.protocols.TP;
 import org.jgroups.protocols.relay.*;
 import org.jgroups.stack.AddressGenerator;
 import org.jgroups.stack.IpAddress;
@@ -124,7 +124,7 @@ public class JGroupsTransport implements Transport {
    private static final byte REQUEST = 0;
    private static final byte RESPONSE = 1;
    private static final byte SINGLE_MESSAGE = 2;
-   private static final byte EMPTY_MESSAGE_BYTE = 0;
+   public static final byte EMPTY_MESSAGE_BYTE = 0;
    private static final ByteBuffer EMPTY_MESSAGE_BUFFER = ByteBufferImpl.create(new byte[]{EMPTY_MESSAGE_BYTE});
 
    @Inject protected GlobalConfiguration configuration;
@@ -411,16 +411,6 @@ public class JGroupsTransport implements Transport {
       requests = new RequestRepository();
 
       initChannel();
-
-      // register InfinispanMessage with the correct marshaller:
-      Supplier<Message> msg_creator=() -> new InfinispanMessage().setMarshaller(this.marshaller);
-      MessageFactory mf=new MessageFactory(); // .registerDefaultTypes();
-      mf.register(InfinispanMessage.TYPE, msg_creator);
-
-      // don't register default types; we use the MessageFactory singleton to look up other messages; this instance
-      // is used *only* for InfinispanMessage creation. Other messages won't be seen in JGroupsTransport anyway
-      TP transport=channel.stack().getTransport();
-      transport.setMessageFactory(mf);
 
       channel.setUpHandler(channelCallbacks);
       setXSiteViewListener(channelCallbacks);
@@ -1142,14 +1132,14 @@ public class JGroupsTransport implements Transport {
    }
 
    void doSendForCrossSite(SiteAddress target, Object command, long requestId, DeliverOrder deliverOrder) {
-      Message message = new InfinispanMessage(target, command).setMarshaller(this.marshaller);
+      Message message = new InfinispanMessage(target, command, this.marshaller);
       addRequestHeader(message, requestId);
       setMessageFlagsForCrossSite(message, deliverOrder);
       send(message);
    }
 
    void doSendForCluster(Address address, ExtendedUUID target, Object command, long requestId, DeliverOrder deliverOrder) {
-      Message message = new InfinispanMessage(target, command).setMarshaller(this.marshaller);
+      Message message = new InfinispanMessage(target, command, this.marshaller);
       addRequestHeader(message, requestId);
       setMessageFlagsForCluster(message, deliverOrder);
       send(message);
@@ -1283,7 +1273,7 @@ public class JGroupsTransport implements Transport {
     * Send a command to the entire cluster.
     */
    private void sendCommandToAll(ReplicableCommand command, long requestId, DeliverOrder deliverOrder) {
-      Message message = new InfinispanMessage(null, command).setMarshaller(this.marshaller);
+      Message message = new InfinispanMessage(null, command, this.marshaller);
       addRequestHeader(message, requestId);
       setMessageFlagsForCluster(message, deliverOrder);
       send(message);
@@ -1350,7 +1340,7 @@ public class JGroupsTransport implements Transport {
    private void sendCommand(Collection<Address> targets, ReplicableCommand command, long requestId,
                             DeliverOrder deliverOrder) {
       Objects.requireNonNull(targets);
-      Message message = new InfinispanMessage(null, command).setMarshaller(this.marshaller);
+      Message message = new InfinispanMessage(null, command, this.marshaller);
       addRequestHeader(message, requestId);
       setMessageFlagsForCluster(message, deliverOrder);
 
@@ -1387,37 +1377,102 @@ public class JGroupsTransport implements Transport {
    }
 
    void processMessage(Message message) {
-      org.jgroups.Address src = message.src();
-      Object command=message.getObject();
-      short flags = message.getFlags();
-      RequestCorrelator.Header header = message.getHeader(HEADER_ID);
-      byte type;
-      long requestId;
-      if (header != null) {
-         type = header.type;
-         requestId = header.requestId();
-      } else {
-         type = SINGLE_MESSAGE;
-         requestId = Request.NO_REQUEST_ID;
-      }
-      if (!running) {
-         if (log.isTraceEnabled())
-            log.tracef("Ignoring message received before start or after stop");
-         if (type == REQUEST) {
-            sendResponse(src, CacheNotFoundResponse.INSTANCE, requestId, null);
+       org.jgroups.Address src = message.src();
+       short flags = message.getFlags();
+       byte[] buffer = message.getArray();
+       int offset = message.getOffset();
+       int length = message.getLength();
+       RequestCorrelator.Header header = message.getHeader(HEADER_ID);
+       byte type;
+       long requestId;
+       if (header != null) {
+          type = header.type;
+          requestId = header.requestId();
+       } else {
+          type = SINGLE_MESSAGE;
+          requestId = Request.NO_REQUEST_ID;
+       }
+       if (!running) {
+          if (log.isTraceEnabled())
+             log.tracef("Ignoring message received before start or after stop");
+          if (type == REQUEST) {
+             sendResponse(src, CacheNotFoundResponse.INSTANCE, requestId, null);
+          }
+          return;
+       }
+       switch (type) {
+          case SINGLE_MESSAGE:
+          case REQUEST:
+             processRequest(src, flags, buffer, offset, length, requestId);
+             break;
+          case RESPONSE:
+             processResponse(src, buffer, offset, length, requestId);
+             break;
+          default:
+             CLUSTER.invalidMessageType(type, src);
+       }
+    }
+
+   private void processRequest(org.jgroups.Address src, short flags, byte[] buffer, int offset, int length,
+                               long requestId) {
+      try {
+         DeliverOrder deliverOrder = decodeDeliverMode(flags);
+         if (Objects.equals(src, channel.getAddress())) {
+            // DISCARD ignores the DONT_LOOPBACK flag, see https://issues.jboss.org/browse/JGRP-2205
+            if (log.isTraceEnabled())
+               log.tracef("Ignoring request %d from self without total order", requestId);
+            return;
          }
-         return;
+
+         Object command = marshaller.objectFromByteBuffer(buffer, offset, length);
+         Reply reply;
+         if (requestId != Request.NO_REQUEST_ID) {
+            if (log.isTraceEnabled())
+               log.tracef("%s received request %d from %s: %s", getAddress(), requestId, src, command);
+            reply = response -> sendResponse(src, response, requestId, command);
+         } else {
+            if (log.isTraceEnabled())
+               log.tracef("%s received command from %s: %s", getAddress(), src, command);
+            reply = Reply.NO_OP;
+         }
+         if (org.jgroups.util.Util.isFlagSet(flags, Message.Flag.NO_RELAY)) {
+            assert command instanceof ReplicableCommand;
+            assert src instanceof ExtendedUUID;
+            invocationHandler.handleFromCluster(AddressCache.fromExtendedUUID((ExtendedUUID) src), (ReplicableCommand) command, reply, deliverOrder);
+         } else {
+            assert src instanceof SiteAddress;
+            assert command instanceof XSiteRequest;
+            String originSite = ((SiteAddress) src).getSite();
+            invocationHandler.handleFromRemoteSite(originSite, (XSiteRequest<?>) command, reply, deliverOrder);
+         }
+      } catch (Throwable t) {
+         CLUSTER.errorProcessingRequest(requestId, src, t);
+         Exception e = t instanceof Exception ? ((Exception) t) : new CacheException(t);
+         sendResponse(src, new ExceptionResponse(e), requestId, null);
       }
-      switch (type) {
-         case SINGLE_MESSAGE:
-         case REQUEST:
-            processRequest(src, flags, command, requestId);
-            break;
-         case RESPONSE:
-            processResponse(src, command, requestId);
-            break;
-         default:
-            CLUSTER.invalidMessageType(type, src);
+   }
+
+   private void processResponse(org.jgroups.Address src, byte[] buffer, int offset, int length, long requestId) {
+      try {
+         Response response;
+         if (length == 0) {
+            // Empty buffer signals the ForkChannel with this name is not running on the remote node
+            response = CacheNotFoundResponse.INSTANCE;
+         } else if (length == 1 && buffer[0] == EMPTY_MESSAGE_BYTE) {
+            response = SuccessfulResponse.SUCCESSFUL_EMPTY_RESPONSE;
+         } else {
+            response = (Response) marshaller.objectFromByteBuffer(buffer, offset, length);
+         }
+         if (log.isTraceEnabled())
+            log.tracef("%s received response for request %d from %s: %s", getAddress(), requestId, src, response);
+         if (src instanceof SiteUUID siteUUID) {
+            requests.addResponse(requestId, siteUUID.getSite(), response);
+         } else {
+            assert src instanceof ExtendedUUID;
+            requests.addResponse(requestId, AddressCache.fromExtendedUUID((ExtendedUUID) src), response);
+         }
+      } catch (Throwable t) {
+         CLUSTER.errorProcessingResponse(requestId, src, t);
       }
    }
 
