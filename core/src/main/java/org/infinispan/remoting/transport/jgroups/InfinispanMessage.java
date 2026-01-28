@@ -2,10 +2,13 @@ package org.infinispan.remoting.transport.jgroups;
 
 import org.infinispan.commons.marshall.Marshaller;
 import org.infinispan.marshall.protostream.impl.GlobalMarshaller;
+import org.infinispan.protostream.ProtobufUtil;
 import org.infinispan.remoting.responses.SuccessfulResponse;
+import org.jgroups.MessageFactory;
 import org.jgroups.util.*;
 
 import java.io.*;
+import java.util.Objects;
 import java.util.function.Supplier;
 
 public class InfinispanMessage extends org.jgroups.BaseMessage {
@@ -13,8 +16,11 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    protected Object              obj; // change to AbstractDataCommand, CacheRpcCommand, ReplicableCommand?
    protected GlobalMarshaller    marshaller;
    protected volatile int        cached_size=-1; // look into replacing with VarHandle
-   protected static final short  TYPE=1005;
+   public static final short  TYPE=15;
 
+   static {
+      MessageFactory.get().registerDefaultMessage(TYPE, InfinispanBytesMessage::new);
+   }
 
    public InfinispanMessage() {
       this(null);
@@ -26,10 +32,8 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
     *             sent to a single member.
     */
    public InfinispanMessage(org.jgroups.Address dest) {
-      this(dest, null);
+      super(dest);
    }
-
-
 
    /**
     * Constructs a message given a destination address and the payload object
@@ -37,12 +41,11 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
     *             sent to a single member.
     * @param obj To be used as payload.
     */
-   public InfinispanMessage(org.jgroups.Address dest, Object obj) {
+   public InfinispanMessage(org.jgroups.Address dest, Object obj, Marshaller m) {
       super(dest);
+      setMarshaller(m);
       setObject(obj);
    }
-
-
 
 
    public Supplier<org.jgroups.Message> create()                 {return InfinispanMessage::new;}
@@ -62,9 +65,10 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
     * it will be wrapped into an {@link ObjectWrapperSerializable} (which does implement SizeStreamable)
     */
    public InfinispanMessage setObject(Object obj) {
+      if(Objects.equals(this.obj, obj))
+         return this;
       this.obj=obj;
-      if(obj == null)
-         cached_size=0;
+      cached_size=this.obj == null? 0 : -1;
       return this;
    }
 
@@ -73,22 +77,27 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    }
 
    public void writePayload(DataOutput out) throws IOException {
-      OutputStream outstream=out instanceof OutputStream? (OutputStream)out
-        : new OutputStreamAdapter((ByteArrayDataOutputStream)out);
+      ByteArrayDataOutputStream outstream=(ByteArrayDataOutputStream)out;
       try {
-         if(obj == null) {
-            out.writeByte(-1);
-            return;
+         // int length=msg.getLength()
+         int pos=outstream.position();
+         outstream.writeInt(-1); // placeholder for length (4 bytes)
+         if(obj == SuccessfulResponse.SUCCESSFUL_EMPTY_RESPONSE) {
+            out.writeByte(JGroupsTransport.EMPTY_MESSAGE_BYTE);
          }
-         out.writeByte(1);
-         marshaller.writeObject(obj, outstream);
-         outstream.write(0);
+         else
+            marshaller.writeObject(obj, outstream);
+
+         int length=outstream.position() - pos - Integer.BYTES;
+         byte[] buf=outstream.buffer();
+         Util.INT_ARRAY_VIEW.set(buf, pos, length); // replace the placeholder with the actual length
       }
       catch(Throwable t) {
          System.err.printf("exception: %s\n", t);
       }
    }
 
+   // not used
    public void readPayload(DataInput in) throws IOException, ClassNotFoundException {
       try {
          byte is_null=in.readByte();
@@ -108,9 +117,7 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    }
 
    @Override protected org.jgroups.Message copyPayload(org.jgroups.Message copy) {
-      if(obj != null)
-         ((InfinispanMessage)copy).setObject(obj);
-      ((InfinispanMessage)copy).cached_size=cached_size;
+      ((InfinispanMessage)copy).setMarshaller(this.marshaller).setObject(obj);
       return copy;
    }
 
@@ -124,10 +131,15 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
       int tmp=cached_size; // volatile read
       if(tmp >= 0)
          return tmp;
-      return cached_size=actualSize();
+       try {
+           return cached_size=ProtobufUtil.computeWrappedMessageSize(marshaller.getSerializationContext(), obj); //actualSize();
+       }
+       catch(IOException e) {
+           throw new RuntimeException(e);
+       }
    }
 
-   protected int actualSize() {
+   /*protected int actualSize() {
       if(obj == null)
          return 0;
       SizeCountingOutputStream out=new SizeCountingOutputStream();
@@ -138,5 +150,5 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
       catch(IOException e) {
          throw new RuntimeException(e);
       }
-   }
+   }*/
 }
