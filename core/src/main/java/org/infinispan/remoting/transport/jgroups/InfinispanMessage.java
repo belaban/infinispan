@@ -16,10 +16,10 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    protected Object              obj; // change to AbstractDataCommand, CacheRpcCommand, ReplicableCommand?
    protected GlobalMarshaller    marshaller;
    protected volatile int        cached_size=-1; // look into replacing with VarHandle
-   public static final short  TYPE=15;
+   public static final short     TYPE=128;
 
    static {
-      MessageFactory.get().registerDefaultMessage(TYPE, InfinispanBytesMessage::new);
+      MessageFactory.register(TYPE, InfinispanBytesMessage::new);
    }
 
    public InfinispanMessage() {
@@ -77,20 +77,21 @@ public class InfinispanMessage extends org.jgroups.BaseMessage {
    }
 
    public void writePayload(DataOutput out) throws IOException {
-      ByteArrayDataOutputStream outstream=(ByteArrayDataOutputStream)out;
+      BaseDataOutputStream outstream=(BaseDataOutputStream)out;
       try {
          // int length=msg.getLength()
-         int pos=outstream.position();
+         int prev_pos=outstream.position();
          outstream.writeInt(-1); // placeholder for length (4 bytes)
-         if(obj == SuccessfulResponse.SUCCESSFUL_EMPTY_RESPONSE) {
+         if(obj == SuccessfulResponse.SUCCESSFUL_EMPTY_RESPONSE)
             out.writeByte(JGroupsTransport.EMPTY_MESSAGE_BYTE);
-         }
          else
             marshaller.writeObject(obj, outstream);
 
-         int length=outstream.position() - pos - Integer.BYTES;
-         byte[] buf=outstream.buffer();
-         Util.INT_ARRAY_VIEW.set(buf, pos, length); // replace the placeholder with the actual length
+         int curr_pos=outstream.position();
+         int length=curr_pos - prev_pos - Integer.BYTES;
+         outstream.position(prev_pos); // go to the location where 'size' was written
+         outstream.writeInt(length);
+         outstream.position(curr_pos);
       }
       catch(Throwable t) {
          System.err.printf("exception: %s\n", t);

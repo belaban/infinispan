@@ -1489,7 +1489,7 @@ public class JGroupsTransport implements Transport {
       try {
          // If no response, then send a buffer containing a single byte. An empty payload is not possible,
          // as this can also signify to a receiver that the ForkChannel is not running on this node.
-         message.setObject(response);
+          message.setObject(Objects.requireNonNullElse(response, SuccessfulResponse.SUCCESSFUL_EMPTY_RESPONSE));
       } catch (Throwable t) {
          try {
             // this call should succeed (all exceptions are serializable)
